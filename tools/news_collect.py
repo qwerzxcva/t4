@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# collect sina 7x24 realtime financial news, dedup, tag related watchlist, append to 消息面/
-import json, urllib.request, os, sys, datetime
+# collect sina 7x24 + 财联社电报 + 新华社时政/财经, dedup, tag related watchlist, append to 消息面/
+import json, re, urllib.request, urllib.error, os, sys, datetime
 
 ROOT = sys.argv[1]
 CN = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=8)
@@ -13,8 +13,6 @@ seen = set()
 if os.path.exists(SEEN):
     seen = {l.strip() for l in open(SEEN, encoding="utf-8") if l.strip()}
 
-# sina 7x24 realtime API (live feed, updates every minute)
-API = "https://app.cj.sina.com.cn/api/news/pc?page=1&num=200"
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120 Safari/537.36",
       "Referer": "https://finance.sina.com.cn/7x24/"}
 
@@ -89,25 +87,67 @@ def tag(title):
 
 
 new_items = []
-try:
-    req = urllib.request.Request(API, headers=UA)
-    data = json.load(urllib.request.urlopen(req, timeout=20))
-    feed = data.get("result", {}).get("data", {}).get("feed", {}).get("list", [])
-except Exception as e:
-    print(f"ERR {e}")
-    sys.exit(0)
 
-for x in feed:
-    nid = str(x.get("id", ""))
-    if not nid or nid in seen:
-        continue
-    seen.add(nid)
-    title = (x.get("rich_text", "") or "").replace("\n", " ").strip()
-    ctime = x.get("create_time", "") or ""
-    tags = tag(title)
-    rel = ", ".join(tags) if tags else "—"
-    line = f"- [{ctime}] {title}  \n  - 涉及: {rel}  \n  - 来源: 新浪7x24 | id={nid}"
-    new_items.append((ctime, line))
+def http_json(url, timeout=20):
+    req = urllib.request.Request(url, headers=UA)
+    return json.load(urllib.request.urlopen(req, timeout=timeout))
+
+def http_text(url, timeout=20):
+    req = urllib.request.Request(url, headers=UA)
+    return urllib.request.urlopen(req, timeout=timeout).read().decode("utf-8", "replace")
+
+# ── source 1: 新浪 7x24 财经 ─────────────────────────────
+try:
+    data = http_json("https://app.cj.sina.com.cn/api/news/pc?page=1&num=200")
+    feed = data.get("result", {}).get("data", {}).get("feed", {}).get("list", [])
+    for x in feed:
+        nid = str(x.get("id", ""))
+        key = f"sina:{nid}"
+        if not nid or key in seen:
+            continue
+        seen.add(key)
+        title = (x.get("rich_text", "") or "").replace("\n", " ").strip()
+        ctime = x.get("create_time", "") or ""
+        tags = tag(title)
+        rel = ", ".join(tags) if tags else "—"
+        new_items.append((ctime, f"- [{ctime}] {title}  \n  - 涉及: {rel}  \n  - 来源: 新浪7x24 | id={nid}"))
+except Exception as e:
+    print(f"ERR sina: {e}", file=sys.stderr)
+
+# ── source 2: 财联社电报 (财经快讯) ─────────────────────────
+try:
+    data = http_json("https://www.cls.cn/nodeapi/telegraphList?app=CailianpressWeb&os=web&sv=8.4.6&sign=9dc7288db1f2472d0d42e1ea54f7411f")
+    for x in (data.get("data", {}).get("roll_data", []))[:100]:
+        nid = str(x.get("id", ""))
+        key = f"cls:{nid}"
+        if not nid or key in seen:
+            continue
+        seen.add(key)
+        title = (x.get("title") or x.get("content") or "").strip()
+        if not title:
+            continue
+        ts = str(x.get("ctime", "") or "")[:19]
+        tags = tag(title)
+        rel = ", ".join(tags) if tags else "—"
+        new_items.append((ts, f"- [{ts}] 【财联社】{title}  \n  - 涉及: {rel}  \n  - 来源: 财联社电报 | id={nid}"))
+except Exception as e:
+    print(f"ERR cls: {e}", file=sys.stderr)
+
+# ── source 3: 中国政府网 (政事/政策) ───────────────────────────
+try:
+    html = http_text("https://www.gov.cn/zhengce/zuixin.htm", timeout=15)
+    # 提取政策条目: <li class="list01"><a ...>标题</a></li> 或时间戳格式
+    for m in re.finditer(r'<li\s+class="list01"[^>]*>.*?<a[^>]*>([^<]+)</a>.*?<span>([\d/]+)</span>', html, re.S):
+        title, ts = m.group(1).strip(), m.group(2)
+        key = f"gov:{title[:40]}"
+        if key in seen:
+            continue
+        seen.add(key)
+        tags = tag(title)
+        rel = ", ".join(tags) if tags else "—"
+        new_items.append((ts, f"- [{ts}] 【政府网】{title}  \n  - 涉及: {rel}  \n  - 来源: 中国政府网 | id={key}"))
+except Exception as e:
+    print(f"ERR gov: {e}", file=sys.stderr)
 
 new_items.sort(key=lambda a: a[0])
 daily = os.path.join(NEWS, f"{DATE}.md")
