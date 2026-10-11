@@ -73,13 +73,58 @@ def weibo_hot():
         out = []
         for m in re.finditer(r'<td class="td-02">(.*?)</td>\s*<td class="td-01">(.*?)</td>', body, re.S):
             rank, word = re.sub(r"<[^>]+>", "", m.group(1)).strip(), re.sub(r"<[^>]+>", "", m.group(2)).strip()
-            hot = re.sub(r"<[^>]+>", "", m.group(3)).strip() if len(m.groups()) > 2 else ""
             out.append({"ts": "", "title": f"[微博热搜#{rank}] {word}", "theme": [],
                         "sentiment": "neu", "src": "weibo-hot", "hot_value": None})
         return out
     except Exception as e:
         print(f"[weibo] err: {e}", file=sys.stderr)
         return []
+
+
+def xueqiu_hot():
+    """雪球热门讨论: 阿里云 WAF JS 挑战; 纯 HTTP 带 PC UA 重试, 失败静默降级"""
+    for base in ("https://xueqiu.com", "https://stock.xueqiu.com"):
+        try:
+            url = f"{base}/v5/statuses/hot/listV2.json?count=10&since_id=-1&max_id=-1" if "stock" in base else \
+                  f"{base}/statuses/hot/listV2.json?count=10"
+            body = urllib.request.urlopen(urllib.request.Request(url, headers={**UA_PC, "Referer": "https://xueqiu.com/"}),
+                                          timeout=12).read().decode("utf-8", "replace")
+            d = json.loads(body)
+            out = []
+            for it in (d.get("list") or d.get("statuses") or [])[:10]:
+                st = it.get("original_status") or it
+                text = re.sub(r"<[^>]+>", "", str(st.get("text", ""))).strip()
+                if text:
+                    out.append({"ts": "", "title": f"[雪球热议] {text[:80]}", "theme": [],
+                                 "sentiment": "neu", "src": "xueqiu-hot"})
+            if out:
+                return out
+        except Exception as e:
+            print(f"[xueqiu] {base} err: {e}", file=sys.stderr)
+    return []
+
+
+def qq_news_author(author_id="5233565"):
+    """腾讯新闻作者文章流: i.news.qq.com 公开接口; 失败静默降级"""
+    out = []
+    for ep in (f"https://i.news.qq.com/web/omn/author/articles?author_id={author_id}&page=1&size=20",
+               f"https://i.news.qq.com/web_backend/getAuthorArticleList?authorId={author_id}&page=1&size=20"):
+        try:
+            body = urllib.request.urlopen(urllib.request.Request(ep, headers={**UA_PC, "Referer": "https://news.qq.com/"}),
+                                          timeout=12).read().decode("utf-8", "replace")
+            d = json.loads(body)
+            items = (d.get("data") or {}).get("list") or d.get("list") or (d.get("data") or {}).get("articleList") or []
+            for it in items[:20]:
+                t = str(it.get("title", "")).strip()
+                if t:
+                    out.append({"ts": str(it.get("publish_time") or it.get("time", ""))[:19],
+                                 "title": f"[腾讯新闻·作者{author_id}] {t[:80]}", "theme": [],
+                                 "sentiment": "neu", "src": "qq-news-author"})
+            if out:
+                break
+        except Exception as e:
+            print(f"[qq-news] {ep.split('?')[0].split('/')[-1]} err: {e}", file=sys.stderr)
+    return out
 
 
 def main():
@@ -93,8 +138,12 @@ def main():
     items += xhs_explore()
     time.sleep(0.5)
     items += weibo_hot()
+    time.sleep(0.5)
+    items += xueqiu_hot()
+    time.sleep(0.5)
+    items += qq_news_author()
     report = {"ts": now.isoformat(), "date": now.strftime("%Y-%m-%d"),
-              "items": items, "meta": {"sources": ["douyin-hot", "xhs-explore", "weibo-hot"],
+              "items": items, "meta": {"sources": ["douyin-hot", "xhs-explore", "weibo-hot", "xueqiu-hot", "qq-news-author"],
                                         "zero_cred": True}}
     text = json.dumps(report, ensure_ascii=False, indent=2)
     if args.out:
