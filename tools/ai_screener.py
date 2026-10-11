@@ -128,6 +128,28 @@ def fetch_concepts(retries=3):
 
 
 # ─── 新闻 (新浪7x24 + 东财, 含政策/财经) ──────────────────────────────────
+def fetch_remote_news(raw_base="https://raw.githubusercontent.com/qwerzxcva/stocks-data-news/main/news", days=3):
+    """Fallback: 从远端 data-news 仓拉最近 N 天新闻（本地无文件时回退）."""
+    import datetime as _dt
+    out = []
+    for i in range(days):
+        d = (_dt.datetime.now(_dt.timezone(_dt.timedelta(hours=8))) - _dt.timedelta(days=i)).strftime("%Y-%m-%d")
+        url = f"{raw_base}/{d}.md"
+        try:
+            body = urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=10).read().decode("utf-8", "replace")
+            for line in body.splitlines():
+                m = re.match(r'\s*-\s*\[(\d{4}-\d{2}-\d{2}\s*\d{2}:\d{2}(?::\d{2})?)\]\s+(.+)', line)
+                if not m:
+                    continue
+                t = m.group(2).strip()
+                if len(t) < 6:
+                    continue
+                out.append({"ts": m.group(1)[:19], "title": t, "theme": sorted(theme_of(t)), "src": "data-news", "digest": ""})
+        except Exception as e:
+            print(f"[remote-news {d}] {e}", file=sys.stderr)
+    return out
+
+
 def fetch_news(limit=120):
     news = []
     seen = set()
@@ -216,6 +238,9 @@ def main():
     concepts = fetch_concepts()
     # 4. 新闻
     news = fetch_news(args.limit)
+    if len(news) < 10:
+        news += fetch_remote_news(days=args.days)
+        print(f"[news] total after remote fallback: {len(news)}", flush=True)
 
     # 主题命中统计
     theme_news = {}
