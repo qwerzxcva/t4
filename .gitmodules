@@ -1,0 +1,6 @@
+[submodule "reference/stock-api"]
+	path = reference/stock-api
+	url = https://github.com/zhangxiangliang/stock-api
+[submodule "reference/a-stock-data"]
+	path = reference/a-stock-data
+	url = https://github.com/simonlin1212/a-stock-data
