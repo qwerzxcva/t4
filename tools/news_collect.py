@@ -98,7 +98,7 @@ def http_text(url, timeout=20):
 
 # ── source 1: 新浪 7x24 财经 ─────────────────────────────
 try:
-    data = http_json("https://app.cj.sina.com.cn/api/news/pc?page=1&num=200")
+    data = http_json("https://app.cj.sina.com.cn/api/news/pc?page=1&num=300")
     feed = data.get("result", {}).get("data", {}).get("feed", {}).get("list", [])
     for x in feed:
         nid = str(x.get("id", ""))
@@ -114,7 +114,30 @@ try:
 except Exception as e:
     print(f"ERR sina: {e}", file=sys.stderr)
 
-# ── source 2: 财联社电报 (财经快讯) ─────────────────────────
+# ── source 2: 东财 7x24 (财经 type=8 / 政策 type=11 / 产经 type=12) ──────────
+for ntype, label in [(8, "em-财经"), (11, "em-政策"), (12, "em-产经")]:
+    try:
+        url = (f"https://np-listapi.eastmoney.com/comm/wap/getListInfo"
+               f"?type={ntype}&pageSize=50&pageNo=1&client=web&source=XHH")
+        data = http_json(url)
+        items = ((data.get("data") or {}).get("list")) or []
+        for x in items:
+            nid = str(x.get("id", ""))
+            key = f"{label}:{nid}"
+            if not nid or key in seen:
+                continue
+            seen.add(key)
+            title = (x.get("title", "") or "").replace("\n", " ").strip()
+            if not title:
+                continue
+            ctime = str(x.get("showtime") or x.get("ctime", ""))[:19]
+            tags = tag(title)
+            rel = ", ".join(tags) if tags else "—"
+            new_items.append((ctime, f"- [{ctime}] 【{label}】{title}  \n  - 涉及: {rel}  \n  - 来源: 东财{label} | id={nid}"))
+    except Exception as e:
+        print(f"ERR em-{label}: {e}", file=sys.stderr)
+
+# ── source 3: 财联社电报 (财经快讯) ─────────────────────────
 try:
     data = http_json("https://www.cls.cn/nodeapi/telegraphList?app=CailianpressWeb&os=web&sv=8.4.6&sign=9dc7288db1f2472d0d42e1ea54f7411f")
     for x in (data.get("data", {}).get("roll_data", []))[:100]:
