@@ -4,7 +4,7 @@
    只覆盖实时字段: ts/market/phase/ladder/limit_up_pool/picks(实时价)/news_recent
    cron */10 推送, Pages自动部署~1.5分钟生效
 """
-import json, os, re, base64, datetime, urllib.request, glob, ssl
+import json, os, re, base64, datetime, urllib.request, glob, ssl, pathlib
 
 def _sslctx():
     c = ssl.create_default_context()
@@ -229,8 +229,12 @@ def put_file(path, content_bytes, msg):
 
 def main():
     data = build()
-    sha = put_file("data/latest.json", json.dumps(data, ensure_ascii=False).encode(),
-                   f"local realtime sync {data['ts']}")
+    raw = json.dumps(data, ensure_ascii=False).encode()
+    # 本地落盘一份, 供 dual_push.py 双账号镜像
+    pathlib.Path(os.path.join(BASE, "data")).mkdir(parents=True, exist_ok=True)
+    with open(os.path.join(BASE, "data", "pages_latest.json"), "wb") as f:
+        f.write(raw)
+    sha = put_file("data/latest.json", raw, f"local realtime sync {data['ts']}")
     print("pushed data/latest.json ->", sha)
 
 if __name__ == "__main__":
