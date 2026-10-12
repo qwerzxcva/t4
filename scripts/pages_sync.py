@@ -63,29 +63,42 @@ def build():
     first = sum(1 for z in zt if z.get("lbc", 1) == 1)
     g = glob.get("metrics", {})
 
-    # AI推荐(实时价+评分) — qt实时补名称/现价(ai_picks无name/rt)
+    # 打板池picks = 今日涨停+连板票(页面期望连板梯队), 按连板高→低排序; 旧AI推荐放不下这里
+    tpl_picks = {p.get("code"): p for p in (data.get("picks") or [])}
     picks = []
-    syms = [p.get("symbol", "") for p in (ap.get("picks") or [])[:15]]
-    rt = {}
+    for z in sorted(zt, key=lambda x: -(x.get("lbc", 1) * 10000 - (x.get("fbt", 0) or 0))):
+        code = z.get("code", "")
+        old = tpl_picks.get(code, {})
+        picks.append({"code": code, "name": z.get("name", ""), "price": z.get("price", 0),
+                      "chg_pct": z.get("pct", 9.9), "lianban": z.get("lbc", 1),
+                      "zt_time": str(z.get("fbt", "")), "theme_hit": old.get("theme_hit", False),
+                      "rps5": old.get("rps5"), "rps20": old.get("rps20"),
+                      "score": round(min(0.99, 0.3 + 0.1 * z.get("lbc", 1)), 3)})
+
+    # 指数实时(qt): sh000001/sz399001/sh000300/sz399006/sh000688
+    idx_defs = [("sh000001","上证指数"),("sz399001","深证成指"),("sh000300","沪深300"),
+                ("sz399006","创业板指"),("sh000688","科创50")]
+    indices = []
     try:
-        url = "https://qt.gtimg.cn/q=" + ",".join(syms)
+        url = "https://qt.gtimg.cn/q=" + ",".join(c for c,_ in idx_defs)
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         b = urllib.request.urlopen(req, timeout=15, context=_sslctx()).read().decode("gbk", "ignore")
+        rt_idx = {}
         for line in b.strip().split(";"):
             line = line.strip()
             if "=" not in line: continue
             k, v = line.split("=", 1)
             pp = v.strip('"').split("~")
-            if len(pp) > 45 and pp[1]:
-                rt[k.split("_")[-1].lower()] = (pp[1], float(pp[3] or 0), float(pp[32] or 0))
+            if len(pp) > 45 and pp[3]:
+                rt_idx[k.split("_")[-1].lower()] = (float(pp[3]), float(pp[4]), float(pp[32] or 0))
+        for code, name in idx_defs:
+            r = rt_idx.get(code)
+            if r:
+                indices.append({"code": code, "name": name, "price": r[0], "prev": r[1], "chg_pct": r[2]})
     except Exception:
-        pass
-    for p in (ap.get("picks") or [])[:15]:
-        sym = p.get("symbol", "")
-        r = rt.get(sym, ("", 0, 0))
-        picks.append({"code": sym[2:], "name": r[0], "price": r[1], "chg_pct": r[2],
-                      "lianban": 1, "zt_time": "", "theme_hit": False,
-                      "rps5": None, "rps20": None, "score": round((p.get("score", 0) or 0) * 100)})
+        indices = data.get("market", {}).get("indices", [])
+    if not indices:
+        indices = data.get("market", {}).get("indices", [])
 
     lup = [{"code": z.get("code", ""), "name": z.get("name", ""), "price": z.get("price", 0),
             "chg_pct": z.get("pct", 9.9), "lianban": z.get("lbc", 1), "zt_time": str(z.get("fbt", ""))}
@@ -95,10 +108,15 @@ def build():
     news_recent = [{"ts": x.get("time", ""), "title": (x.get("title", "") or "")[:80],
                     "theme": (x.get("themes") or [])[:2], "sentiment": x.get("sentiment", "neu"),
                     "src": x.get("source", "em"), "digest": ""} for x in items[:40]] or data.get("news_recent", [])
+    # 多源热榜(同花顺/抖音/B站/头条)并入: 热榜条目标记[热榜]
+    hf = jload(f"{BASE}/data/hotfeeds/latest.json")
+    for f in (hf.get("feeds") or [])[:30]:
+        news_recent.append({"ts": f.get("ts", ""), "title": "[" + f.get("src", "") + "] " + (f.get("title", "") or "")[:70],
+                            "theme": [], "sentiment": "neu", "src": f.get("src", ""), "digest": f.get("digest", "")})
 
     data.update({
         "ts": ts, "date": now.strftime("%Y%m%d"),
-        "market": {**data.get("market", {}), "limit_up": nzt, "limit_down": len(hot.get("dt", [])),
+        "market": {**data.get("market", {}), "indices": indices, "limit_up": nzt, "limit_down": len(hot.get("dt", [])),
                    "broken": nzb, "zt_rate": seal},
         "phase": {**data.get("phase", {}), "score": g.get("global_score"),
                   "stage": g.get("global_mood", ""), "desc": g.get("suggest", ""),
