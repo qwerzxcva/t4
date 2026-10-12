@@ -1,0 +1,28 @@
+name: llm-daily-review
+on:
+  schedule:
+    - cron: "50 7 * * 1-5"   # UTC 7:50 = 北京 15:50 (收盘后)
+  workflow_dispatch:
+permissions:
+  models: read
+  contents: write
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: pip install akshare duckdb requests
+      - name: 采集当日数据(涨停池+新闻+日线增量)
+        run: |
+          python stockdb/scripts/news_map.py || true
+      - name: LLM 复盘(GitHub Models 免费层, token自动注入)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python stockdb/scripts/llm_review.py
+      - name: 提交报告
+        run: |
+          git config user.name bot; git config user.email bot@users.noreply.github.com
+          git add -A && git commit -m "llm review $(date +%F)" || exit 0
+          git push
