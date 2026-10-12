@@ -1,0 +1,22 @@
+name: search-news-crawl
+on:
+  schedule:
+    - cron: "10 1,7 * * 1-5"   # UTC 1:10/7:10 = 北京 9:10/15:10
+  workflow_dispatch:
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: pip install akshare duckdb
+      - name: 抓取新闻+题材映射
+        run: |
+          python stockdb/scripts/news_map.py
+          python stockdb/scripts/theme_to_stocks.py
+      - name: 提交到 t3(新闻仓)
+        run: |
+          git config user.name bot; git config user.email bot@users.noreply.github.com
+          git add . && git commit -m "news map $(date +%F)" || exit 0
+          git push
