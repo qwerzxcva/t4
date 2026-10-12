@@ -49,7 +49,10 @@ def main():
     prev_blob = old.get("pushed_ts")
     if prev_url == data["url"] and old.get("ok") == data["ok"] and prev_blob:
         # URL与状态都没变: 每30分钟发一次心跳
-        if (datetime.datetime.now() - datetime.datetime.fromisoformat(prev_blob)).total_seconds() < 1800:
+        pb = datetime.datetime.fromisoformat(prev_blob)
+        if pb.tzinfo is None:
+            pb = pb.astimezone()
+        if (datetime.datetime.now().astimezone() - pb).total_seconds() < 1800:
             print("no change, skip"); return
     data["ts"] = now; data["pushed_ts"] = now
     json.dump(data, open(STATE, "w"))
