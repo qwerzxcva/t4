@@ -114,6 +114,14 @@ def build():
         news_recent.append({"ts": f.get("ts", ""), "title": "[" + f.get("src", "") + "] " + (f.get("title", "") or "")[:70],
                             "theme": [], "sentiment": "neu", "src": f.get("src", ""), "digest": f.get("digest", "")})
 
+    # cycle.macro_signals: 每个value补code字段(页面渲染列用)
+    cyc = data.get("pools", {}).get("cycle", {})
+    ms = cyc.get("macro_signals")
+    if isinstance(ms, dict):
+        for k, v in ms.items():
+            if isinstance(v, dict) and "code" not in v:
+                v["code"] = k
+
     data.update({
         "ts": ts, "date": now.strftime("%Y%m%d"),
         "market": {**data.get("market", {}), "indices": indices, "limit_up": nzt, "limit_down": len(hot.get("dt", [])),
