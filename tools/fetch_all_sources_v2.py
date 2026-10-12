@@ -135,32 +135,67 @@ def sina_reports(code, limit=10):
 # =====================================================================
 
 def eastmoney_sectors():
-    """东财行业板块排名 (push2.eastmoney.com)"""
+    """东财行业板块排名 — 备用源: 同花顺热点归因 (东财 push2 全被封连时用)"""
+    # 尝试东财主接口
     url = ("https://push2.eastmoney.com/api/qt/clist/get"
-           "?pn=1&pz=200&po=1&np=1&fltt=2&invt=2&fid=f3"
-           "&fs=m:90+t:2&fields=f12,f14,f3,f62,f184,f66,f69,f72,f75,f78,f81,f84,f87")
+           "?pn=1&pz=100&po=1&np=1&fltt=2&invt=2&fid=f3"
+           "&fs=m%3A90%2Bt%3A2&fields=f2%2Cf3%2Cf4%2Cf12%2Cf14%2Cf104%2Cf105%2Cf140")
     body = http(url, headers=UA_EAST)
     try:
         d = json.loads(body)
         diff = (d.get("data") or {}).get("diff") or []
-        return [{"code": s.get("f12",""), "name": s.get("f14",""), "chg_pct": round(float(s.get("f3") or 0), 2),
-                 "main_net": float(s.get("f62") or 0), "amount": float(s.get("f6") or 0),
-                 "turnover": float(s.get("f8") or 0), "pe": float(s.get("f9") or 0)} for s in diff]
-    except: return []
+        if diff:
+            return [{"rank": i+1, "code": s.get("f12",""), "name": s.get("f14",""),
+                     "chg_pct": round(float(s.get("f3") or 0), 2),
+                     "up": int(s.get("f104") or 0), "down": int(s.get("f105") or 0),
+                     "leader": s.get("f140","")} for i, s in enumerate(diff)]
+    except: pass
+    # 降级：用同花顺热点 API 反推热门板块
+    return _ths_hot_sector_fallback()
+
+
+def _ths_hot_sector_fallback():
+    """从同花顺热点题材归因中提取热门板块."""
+    url = "http://zx.10jqka.com.cn/event/api/getharden/date/{d}/orderby/date/orderway/desc/charset/GBK/".format(
+        d=datetime.now(CST).strftime("%Y-%m-%d"))
+    body = http(url)
+    try:
+        d = json.loads(body.decode("gbk", "replace"))
+        rows = d.get("data") or []
+        # 按 reason 字段聚合板块
+        sector_count = defaultdict(int)
+        for r in rows:
+            reason = r.get("reason", "")
+            for kw in ["半导体", "AI", "机器人", "医疗", "新能源", "光伏", "军工", "消费",
+                       "计算机", "通信", "电子", "化工", "汽车", "机械", "建材", "银行",
+                       "保险", "券商", "黄金", "石油", "钢铁", "煤炭", "电力", "航运", "旅游"]:
+                if kw in reason:
+                    sector_count[kw] += 1
+                    break
+        out = sorted(sector_count.items(), key=lambda x: -x[1])
+        return [{"rank": i+1, "name": name, "hit_count": cnt, "source": "ths_hot"}
+                for i, (name, cnt) in enumerate(out[:20])]
+    except Exception as e:
+        print(f"_ths_hot_sector_fallback error: {e}", file=sys.stderr)
+        return []
 
 
 def eastmoney_concept_sectors():
-    """东财概念板块排名 (push2.eastmoney.com)"""
+    """东财概念板块排名 — 备用源: 从热点题材提取"""
     url = ("https://push2.eastmoney.com/api/qt/clist/get"
            "?pn=1&pz=200&po=1&np=1&fltt=2&invt=2&fid=f3"
-           "&fs=m:90+t:3&fields=f12,f14,f3,f62,f184,f66")
+           "&fs=m%3A90%2Bt%3A3&fields=f2%2Cf3%2Cf4%2Cf12%2Cf14%2Cf104%2Cf105")
     body = http(url, headers=UA_EAST)
     try:
         d = json.loads(body)
         diff = (d.get("data") or {}).get("diff") or []
-        return [{"code": s.get("f12",""), "name": s.get("f14",""), "chg_pct": round(float(s.get("f3") or 0), 2),
-                 "main_net": float(s.get("f62") or 0)} for s in diff]
-    except: return []
+        if diff:
+            return [{"rank": i+1, "code": s.get("f12",""), "name": s.get("f14",""),
+                     "chg_pct": round(float(s.get("f3") or 0), 2),
+                     "up": int(s.get("f104") or 0), "down": int(s.get("f105") or 0)}
+                    for i, s in enumerate(diff)]
+    except: pass
+    return _ths_hot_sector_fallback()
 
 
 def northbound_flow():
@@ -346,6 +381,136 @@ def limit_up_stats(date_str=None):
 
 
 # =====================================================================
+# LAYER 12: 海外市场（对 A 股影响推演）
+# =====================================================================
+# 代码来源: scripts/global_panel.py (协作版本)
+# 腾讯代码: usDJI/usIXIC/usINX/hf_CL/hkHSI (qt.gtimg.cn)
+# 新浪代码: hf_CHA50CFD(富时A50) / fx_susdcnh(离岸人民币)
+
+QT_GLOBAL = [
+    ("usDJI","道琼斯","美股指数"), ("usIXIC","纳斯达克","美股指数"),
+    ("usINX","标普500","美股指数"), ("usVIX","VIX恐慌","美股指数"),
+    ("usSOXX","费半ETF","半导体关联"), ("usKWEB","中概ETF","中概关联"),
+    ("usFXI","中国大盘ETF","中概关联"), ("usMCHI","中国ETF","中概关联"),
+    ("usQQQ","纳指100ETF","美股指数"),
+    ("hkHSI","恒生指数","港股"), ("hkHSTECH","恒生科技","港股"),
+    ("hf_XAU","伦敦金","商品"), ("hf_CL","WTI原油","商品"),
+]
+SINA_GLOBAL = [
+    ("hf_CHA50CFD","富时A50期货","中国关联"),
+    ("fx_susdcnh","离岸人民币","汇率"),
+]
+
+
+def qt_global_batch(codes):
+    """腾讯全球行情 — 美股/港股/商品/汇率 (qt.gtimg.cn)"""
+    out = {}
+    url = "https://qt.gtimg.cn/q=" + ",".join(c[0] for c in codes)
+    body = http(url, headers={"Referer": "https://gu.qq.com"})
+    text = body.decode("gbk", "ignore")
+    for code, name, grp in codes:
+        for line in text.strip().split(";"):
+            line = line.strip()
+            if not line.startswith(f'v_{code}="'): continue
+            payload = line.split('"')[1]
+            try:
+                if code.startswith("hf_"):
+                    p = payload.split(",")
+                    out[code] = {"code": code, "name": name, "group": grp,
+                                 "price": float(p[0]), "chg_pct": float(p[1]),
+                                 "time": p[6] if len(p) > 6 else ""}
+                else:
+                    p = payload.split("~")
+                    out[code] = {"code": code, "name": name, "group": grp,
+                                 "price": float(p[3]), "chg_pct": float(p[32]),
+                                 "time": p[30][:14] if len(p) > 30 else ""}
+            except (ValueError, IndexError): continue
+            break
+    return out
+
+
+def sina_global_batch(codes):
+    """新浪全球行情 — 富时A50期货/离岸人民币 (hq.sinajs.cn)"""
+    out = {}
+    url = "https://hq.sinajs.cn/list=" + ",".join(c[0] for c in codes)
+    body = http(url, headers={"Referer": "https://finance.sina.com.cn"})
+    text = body.decode("gbk", "ignore")
+    for code, name, grp in codes:
+        for line in text.strip().split("\n"):
+            if f'hq_str_{code}="' not in line: continue
+            p = line.split('"')[1].split(",")
+            try:
+                if code.startswith("hf_"):
+                    price = float(p[0]); prev = float(p[8])
+                    pct = (price/prev - 1)*100 if prev else 0
+                else:
+                    price = float(p[1]); prev = float(p[3])
+                    pct = (price/prev - 1)*100 if prev else 0
+                out[code] = {"code": code, "name": name, "group": grp,
+                              "price": price, "chg_pct": round(pct, 3),
+                              "time": p[0]}
+            except (ValueError, IndexError): continue
+            break
+    return out
+
+
+def global_to_ashare_signals(items):
+    """全球市场 → 大A传导信号
+    返回: {signals: list[str], mood: str, metrics: dict}
+    """
+    sig = {}   # 传导指标
+    signals = []  # 可读信号文本
+    
+    def get(code):
+        return items.get(code, {})
+    
+    # 富时A50 — 大A最直接的外部锚
+    a50 = get("hf_CHA50CFD")
+    if a50:
+        sig["a50_pct"] = a50["chg_pct"]
+        signals.append(f"富时A50期货 {a50['chg_pct']:+.2f}% → 开盘预期外资{'流入' if a50['chg_pct']>0 else '流出'}")
+    
+    # 中概KWEB — 中国资产全球定价
+    kweb = get("usKWEB")
+    if kweb:
+        sig["kweb_pct"] = kweb["chg_pct"]
+        signals.append(f"中概KWEB {kweb['chg_pct']:+.2f}% → 外资对A股情绪{'偏多' if kweb['chg_pct']>0 else '偏空'}")
+    
+    # VIX — 风险偏好
+    vix = get("usVIX")
+    if vix:
+        sig["vix"] = vix["price"]
+        vix_level = "高波动(避险情绪重)" if vix["price"] > 25 else ("中波动" if vix["price"] > 15 else "低波动(风险偏好强)")
+        signals.append(f"VIX {vix['price']:.1f} → {vix_level}")
+    
+    # 离岸人民币 — 外资成本
+    cny = get("fx_susdcnh")
+    if cny:
+        sig["cny_pct"] = cny["chg_pct"]
+        direction = "贬值压力(外资成本升)" if cny["chg_pct"] > 0 else "升值(外资成本降)"
+        signals.append(f"离岸人民币 {cny['chg_pct']:+.2f}% → {direction}")
+    
+    # 费半ETF — A股半导体链对标
+    sox = get("usSOXX")
+    if sox:
+        sig["sox_pct"] = sox["chg_pct"]
+        signals.append(f"费半ETF {sox['chg_pct']:+.2f}% → A股半导体情绪锚{'看多' if sox['chg_pct']>0 else '看空'}")
+    
+    # 综合外部情绪分
+    score = 0
+    if a50: score += max(-20, min(20, a50["chg_pct"] * 10))
+    if kweb: score += max(-15, min(15, kweb["chg_pct"] * 5))
+    if vix: score -= max(0, vix["price"] - 20) * 3
+    if cny: score += max(-10, min(10, -cny["chg_pct"] * 10))
+    if sox: score += max(-15, min(15, sox["chg_pct"] * 5))
+    
+    mood = "偏多" if score > 10 else ("偏空" if score < -10 else "中性")
+    signals.append(f"★ 外部情绪综合分: {score:+.0f} ({mood}) → 大A开盘外部阻力{'小' if score>0 else '大'}")
+    
+    return {"signals": signals, "mood": mood, "metrics": sig}
+
+
+# =====================================================================
 # LAYER 9: ETF期权
 # =====================================================================
 
@@ -403,45 +568,62 @@ def main():
     ts = datetime.now(CST).strftime("%H%M%S")
     print(f"=== fetch_all_v2 {date_str} {ts} ===\n", flush=True)
 
-    # 加载 universe
+    # 加载 universe，按交易所分群（分群拉取更省时间）
     uv_path = "/root/workspace/stocks-data-kline/data/bulk/universe.csv"
-    codes = []
+    sh_codes, sz_codes, bj_codes = [], [], []
     with open(uv_path) as f:
         for line in f:
             line = line.strip()
-            if line and not line.startswith("#"):
-                parts = line.split("|")
-                if parts[0]:
-                    codes.append(parts[0].strip())
-    print(f"universe: {len(codes)} codes", flush=True)
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split("|")
+            code = parts[0].strip()
+            if code.startswith("sh"): sh_codes.append(code)
+            elif code.startswith("sz"): sz_codes.append(code)
+            elif code.startswith("bj"): bj_codes.append(code)
+    print(f"分群: SH={len(sh_codes)} SZ={len(sz_codes)} BJ={len(bj_codes)}", flush=True)
 
     result = {"date": date_str, "ts": ts, "sources": {}}
 
-    # LAYER 1: 行情
-    print("[L1] 腾讯实时行情 ...", flush=True)
-    snap = tencent_quote(codes)
-    result["sources"]["tencent_quote"] = {"count": len(snap), "sample": list(snap.items())[:2]}
+    # ===== LAYER 1: 行情 — 按交易所分群拉取 =====
+    print("[L1] 腾讯实时行情（分群）...", flush=True)
+    snap_sh = tencent_quote(sh_codes)
+    snap_sz = tencent_quote(sz_codes)
+    snap_bj = tencent_quote(bj_codes)
+    snap = {**snap_sh, **snap_sz, **snap_bj}
+    result["sources"]["tencent_quote"] = {
+        "count": len(snap), "sh": len(snap_sh), "sz": len(snap_sz), "bj": len(snap_bj),
+        "sample": list(snap.items())[:2],
+    }
     with open(os.path.join(DATA, "market", f"snapshot_{date_str}.json"), "w") as f:
         json.dump(snap, f, ensure_ascii=False)
-    print(f"  {len(snap)} stocks", flush=True)
+    print(f"  OK: {len(snap)} stocks (SH={len(snap_sh)} SZ={len(snap_sz)} BJ={len(snap_bj)})", flush=True)
 
-    # LAYER 3: 行业板块
-    print("[L3] 东财行业板块 ...", flush=True)
+    # ===== LAYER 3: 行业板块（东财优先，失败则降级到同花顺热点） =====
+    print("[L3] 东财行业板块...", flush=True)
     sectors = eastmoney_sectors()
     result["sources"]["eastmoney_sectors"] = {"count": len(sectors)}
     with open(os.path.join(DATA, "sector", f"rank_{date_str}.json"), "w") as f:
-        json.dump({"date": date_str, "sectors": sectors}, f, ensure_ascii=False, indent=2)
-    print(f"  {len(sectors)} sectors", flush=True)
+        json.dump({"date": date_str, "sectors": sectors, "source": "eastmoney" if sectors else "ths_fallback"}, f, ensure_ascii=False, indent=2)
+    print(f"  {len(sectors)} sectors (source: {'eastmoney' if sectors else 'ths_fallback'})", flush=True)
 
-    # LAYER 3: 概念板块
-    print("[L3] 东财概念板块 ...", flush=True)
+    # 概念板块
+    print("[L3] 东财概念板块...", flush=True)
     concepts = eastmoney_concept_sectors()
     result["sources"]["eastmoney_concepts"] = {"count": len(concepts)}
     with open(os.path.join(DATA, "sector", f"concepts_{date_str}.json"), "w") as f:
-        json.dump({"date": date_str, "concepts": concepts}, f, ensure_ascii=False, indent=2)
+        json.dump({"date": date_str, "concepts": concepts[:50]}, f, ensure_ascii=False, indent=2)
     print(f"  {len(concepts)} concepts", flush=True)
 
-    # LAYER 8: 涨跌停池
+    # 同花顺热点题材归因（补充板块分析）
+    print("[L3] 同花顺热点题材归因...", flush=True)
+    ths_hot = _ths_hot_sector_fallback()
+    result["sources"]["ths_hot_reason"] = {"count": len(ths_hot)}
+    with open(os.path.join(DATA, "sector", f"hot_reason_{date_str}.json"), "w") as f:
+        json.dump({"date": date_str, "hot_stocks": ths_hot}, f, ensure_ascii=False, indent=2)
+    print(f"  {len(ths_hot)} hot sectors detected", flush=True)
+
+    # ===== LAYER 8: 涨跌停池 =====
     print("[L8] 涨跌停池 ...", flush=True)
     zt_stats = limit_up_stats(date_str.replace("-",""))
     result["sources"]["limit_pool"] = {
@@ -450,11 +632,9 @@ def main():
     }
     with open(os.path.join(DATA, "pool", f"{date_str}.ztpool.json"), "w") as f:
         json.dump({"date": date_str, "pool": zt_stats["zt"], "tc": zt_stats["zt_count"]}, f, ensure_ascii=False, indent=2)
-    with open(os.path.join(DATA, "pool", f"{date_str}.dtpool.json"), "w") as f:
-        json.dump({"date": date_str, "pool": zt_stats["dt"], "tc": zt_stats["dt_count"]}, f, ensure_ascii=False, indent=2)
-    print(f"  ZT:{zt_stats['zt_count']} DT:{zt_stats['dt_count']} ZB:{zt_stats['zb_count']}", flush=True)
+    print(f"  ZT:{zt_stats['zt_count']} DT:{zt_stats['dt_count']} ZB:{zt_stats['zb_count']} (zt_rate={zt_stats['zt_rate']:.1f}%)", flush=True)
 
-    # LAYER 5: 新闻
+    # ===== LAYER 5: 新闻 =====
     print("[L5] 新浪快讯 ...", flush=True)
     sina_n = sina_news(50)
     result["sources"]["sina_news"] = {"count": len(sina_n)}
@@ -462,37 +642,33 @@ def main():
         json.dump({"date": date_str, "news": sina_n}, f, ensure_ascii=False, indent=2)
     print(f"  {len(sina_n)} items", flush=True)
 
-    print("[L5] 财联社快讯 ...", flush=True)
-    cls_n = cls_news(30)
-    result["sources"]["cls_news"] = {"count": len(cls_n)}
-    with open(os.path.join(DATA, "news", f"{date_str}_cls.json"), "w") as f:
-        json.dump({"date": date_str, "news": cls_n}, f, ensure_ascii=False, indent=2)
-    print(f"  {len(cls_n)} items", flush=True)
+    # ===== LAYER 12: 海外市场（→大A传导信号） =====
+    print("[L12] 腾讯全球行情（美股/港股/商品）...", flush=True)
+    qt_g = qt_global_batch(QT_GLOBAL)
+    sina_g = sina_global_batch(SINA_GLOBAL)
+    global_items = {**qt_g, **sina_g}
+    gsig = global_to_ashare_signals(global_items)
+    result["sources"]["global_panel"] = {
+        "count": len(global_items),
+        "mood": gsig["mood"],
+        "metrics": gsig["metrics"],
+        "signals": gsig["signals"],
+        "sample": list(global_items.values())[:5],
+    }
+    with open(os.path.join(DATA, "macro", f"global_{date_str}.json"), "w") as f:
+        json.dump({"date": date_str, "items": global_items, **gsig}, f, ensure_ascii=False, indent=2)
+    for s in gsig["signals"]:
+        print(f"  {s}", flush=True)
 
-    # LAYER 6: 财务（Top 50 热门股）
-    print("[L6] 财务快照 (Top50) ...", flush=True)
-    top_codes = list(snap.keys())[:50]
-    fundamentals = []
-    for code in top_codes:
-        fin = eastmoney_financials(code.replace("sh","").replace("sz",""))
-        if fin:
-            fundamentals.append({"code": code, "financials": fin})
-    result["sources"]["fundamentals"] = {"count": len(fundamentals)}
-    with open(os.path.join(DATA, "fundamentals", f"{date_str}_top50.json"), "w") as f:
-        json.dump({"date": date_str, "stocks": fundamentals}, f, ensure_ascii=False, indent=2)
-    print(f"  {len(fundamentals)} stocks with data", flush=True)
-
-    # LAYER 4: 北向资金（如果可用）
+    # ===== LAYER 4: 北向资金 =====
     print("[L3] 北向资金 ...", flush=True)
     nb = northbound_flow()
     result["sources"]["northbound"] = {"status": "ok" if nb else "unavailable"}
 
-    # LAYER 10: 龙虎榜
+    # ===== LAYER 10: 龙虎榜 =====
     print("[L3] 龙虎榜 ...", flush=True)
     dtb = dragon_tiger_board(date_str.replace("-",""))
     result["sources"]["dragon_tiger"] = {"count": len(dtb)}
-    with open(os.path.join(DATA, "pool", f"{date_str}_dtb.json"), "w") as f:
-        json.dump({"date": date_str, "data": dtb}, f, ensure_ascii=False, indent=2)
     print(f"  {len(dtb)} records", flush=True)
 
     # 写总 index
