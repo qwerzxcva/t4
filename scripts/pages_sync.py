@@ -100,6 +100,60 @@ def build():
     if not indices:
         indices = data.get("market", {}).get("indices", [])
 
+    # AI推荐(未涨停, 五因子) — 单独字段供页面"AI 推荐标的"区, 与打板池picks分开
+    ai_picks = []
+    syms = [p.get("symbol", "") for p in (ap.get("picks") or [])[:15]]
+    rt = {}
+    if syms:
+        try:
+            url = "https://qt.gtimg.cn/q=" + ",".join(syms)
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            b = urllib.request.urlopen(req, timeout=15, context=_sslctx()).read().decode("gbk", "ignore")
+            for line in b.strip().split(";"):
+                line = line.strip()
+                if "=" not in line: continue
+                k, v = line.split("=", 1)
+                pp = v.strip('"').split("~")
+                if len(pp) > 45 and pp[1]:
+                    rt[k.split("_")[-1].lower()] = (pp[1], float(pp[3] or 0), float(pp[32] or 0))
+        except Exception:
+            pass
+    for p in (ap.get("picks") or [])[:15]:
+        sym = p.get("symbol", "")
+        r = rt.get(sym, ("", 0, 0))
+        ai_picks.append({"code": sym[2:], "name": r[0], "price": r[1], "chg_pct": r[2],
+                         "lianban": 1, "zt_time": "", "theme_hit": False,
+                         "rps5": None, "rps20": None, "score": round((p.get("score", 0) or 0), 3)})
+
+    # 每日总结(来自brief)
+    brf = jload(f"{BASE}/data/brief/latest.json")
+    summary = None
+    if brf:
+        lines = []
+        for sec in brf.get("sections", []):
+            t = sec.get("title", "")
+            if "兑现" in t:
+                its = sec.get("items", [])
+                if its:
+                    avg = sec.get("avg")
+                    lines.append(f"### 昨日推荐·今日兑现（均{avg:+.2f}%）" if isinstance(avg, (int, float)) else "### 昨日推荐·今日兑现")
+                    for it in its:
+                        lines.append(f"- {it.get('name','')} {it.get('pct',0):+.2f}%")
+            elif "盘面" in t:
+                lines.append(f"### 今日盘面：涨停{sec.get('zt',0)} 炸板{sec.get('zb',0)} 跌停{sec.get('dt',0)} 涨>5% {sec.get('up5',0)}")
+                names = sec.get("zt_names") or []
+                if names: lines.append("- 龙头: " + " ".join(names[:6]))
+            elif "全球" in t:
+                lines.append(f"### 全球情绪：{sec.get('score')} ({sec.get('mood','')}) → {sec.get('suggest','')}")
+            elif "候选" in t:
+                its = sec.get("items", [])
+                if its:
+                    lines.append("### AI池·明日候选（已核实时价未涨停）")
+                    for it in its[:8]:
+                        if isinstance(it, dict):
+                            lines.append(f"- {it.get('name', it.get('symbol',''))} {it.get('pct', it.get('rt_pct', 0)):+.2f}% 评分{it.get('score','')}")
+        summary = {"ts": ts, "text": chr(10).join(lines)}
+
     lup = [{"code": z.get("code", ""), "name": z.get("name", ""), "price": z.get("price", 0),
             "chg_pct": z.get("pct", 9.9), "lianban": z.get("lbc", 1), "zt_time": str(z.get("fbt", ""))}
            for z in zt[:40]]
@@ -131,7 +185,8 @@ def build():
                   "seal_rate": seal, "first_board": first, "ge2": nzt - first,
                   "max_boards": ladder["height"],
                   "promo_rate": round((nzt - first) / nzt * 100, 1) if nzt else 0},
-        "ladder": ladder, "limit_up_pool": lup, "picks": picks,
+        "ladder": ladder, "limit_up_pool": lup, "picks": picks, "ai_picks": ai_picks,
+        "summary": summary,
         "news_recent": news_recent,
         "meta": {**data.get("meta", {}), "source": "local-realtime", "ts": ts},
     })
