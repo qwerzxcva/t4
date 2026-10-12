@@ -100,6 +100,8 @@ def main():
         import duckdb as _dd
         c = _dd.connect(DB)
         nid = c.execute("SELECT COALESCE(MAX(id),0)+1 FROM analysis").fetchone()[0]
+        # 幂等: 同日brief先删旧的, 保证盘中重跑不堆行且最新
+        c.execute("DELETE FROM analysis WHERE kind='brief' AND trade_date=?", [TODAY])
         c.execute("INSERT INTO analysis (id, trade_date, kind, symbol, payload) VALUES (?,?,?,?,?)",
                   [nid, TODAY, "brief", "", json.dumps(brief, ensure_ascii=False)])
         c.close()
