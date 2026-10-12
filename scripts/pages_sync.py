@@ -176,8 +176,15 @@ def build():
         print("sina live err:", str(e)[:40])
     # 多源热榜(同花顺/抖音/B站/头条)
     hf = jload(f"{BASE}/data/hotfeeds/latest.json")
-    for f in (hf.get("feeds") or [])[:30]:
-        news_recent.append({"ts": f.get("ts", ""), "title": "[" + f.get("src", "") + "] " + (f.get("title", "") or "")[:70],
+    hf_ts = (hf.get("ts") or "")[:19]
+    for f in (hf.get("feeds") or [])[:40]:
+        ts = f.get("ts") or ""
+        # 同花顺给的是epoch秒 → 转时间; 其他源空ts用抓取时刻
+        if ts.isdigit() and len(ts) == 10:
+            ts = datetime.datetime.fromtimestamp(int(ts)).strftime("%Y-%m-%d %H:%M:%S")
+        elif not ts:
+            ts = hf_ts
+        news_recent.append({"ts": ts, "title": "[" + f.get("src", "") + "] " + (f.get("title", "") or "")[:70],
                             "theme": [], "sentiment": "neu", "src": f.get("src", ""), "digest": f.get("digest", "")})
     # 去重(标题) + 按时间倒序
     seen, uniq = set(), []
