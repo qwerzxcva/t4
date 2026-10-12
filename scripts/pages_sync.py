@@ -144,7 +144,8 @@ def build():
                 names = sec.get("zt_names") or []
                 if names: lines.append("- 龙头: " + " ".join(names[:6]))
             elif "全球" in t:
-                lines.append(f"### 全球情绪：{sec.get('score')} ({sec.get('mood','')}) → {sec.get('suggest','')}")
+                sug = sec.get('suggest') or ''
+lines.append(f"### 全球情绪：{sec.get('score')} ({sec.get('mood','')})" + (f" → {sug}" if sug else ""))
             elif "候选" in t:
                 its = sec.get("items", [])
                 if its:
