@@ -163,11 +163,29 @@ def build():
     news_recent = [{"ts": x.get("time", ""), "title": (x.get("title", "") or "")[:80],
                     "theme": (x.get("themes") or [])[:2], "sentiment": x.get("sentiment", "neu"),
                     "src": x.get("source", "em"), "digest": ""} for x in items[:40]] or data.get("news_recent", [])
-    # 多源热榜(同花顺/抖音/B站/头条)并入: 热榜条目标记[热榜]
+    # 实时新浪7x24(每次运行直抓, 不依赖9/19点cron)
+    try:
+        req = urllib.request.Request("https://zhibo.sina.com.cn/api/zhibo/feed?page=1&page_size=30&zhibo_id=152&tag_id=0&type=0",
+                                     headers={"User-Agent": "Mozilla/5.0"})
+        zb = json.loads(urllib.request.urlopen(req, timeout=15, context=_sslctx()).read())
+        for f in (zb.get("result", {}).get("data", {}).get("feed", {}).get("list", [])):
+            raw = f.get("rich_text", "") or ""
+            news_recent.append({"ts": (f.get("create_time", "") or "")[:19], "title": raw[:90],
+                                "theme": [], "sentiment": "neu", "src": "sina", "digest": ""})
+    except Exception as e:
+        print("sina live err:", str(e)[:40])
+    # 多源热榜(同花顺/抖音/B站/头条)
     hf = jload(f"{BASE}/data/hotfeeds/latest.json")
     for f in (hf.get("feeds") or [])[:30]:
         news_recent.append({"ts": f.get("ts", ""), "title": "[" + f.get("src", "") + "] " + (f.get("title", "") or "")[:70],
                             "theme": [], "sentiment": "neu", "src": f.get("src", ""), "digest": f.get("digest", "")})
+    # 去重(标题) + 按时间倒序
+    seen, uniq = set(), []
+    for n in news_recent:
+        t = n.get("title", "")
+        if t and t not in seen:
+            seen.add(t); uniq.append(n)
+    news_recent = sorted(uniq, key=lambda x: x.get("ts", ""), reverse=True)[:80]
 
     # cycle.macro_signals: 每个value补code字段(页面渲染列用)
     cyc = data.get("pools", {}).get("cycle", {})
